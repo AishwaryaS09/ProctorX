@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: proctorx-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - proctorx-mongo-data:/data/db
+
+  python-ai-service:
+    build: ./python-ai-service
+    container_name: proctorx-ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+  backend:
+    build: ./backend
+    container_name: proctorx-backend
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - python-ai-service
+    environment:
+      PORT: "5000"
+      MONGO_URI: "mongodb://mongodb:27017/proctorx"
+      AI_SERVICE_URL: "http://python-ai-service:8000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  frontend:
+    build: ./frontend
+    container_name: proctorx-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  proctorx-mongo-data:

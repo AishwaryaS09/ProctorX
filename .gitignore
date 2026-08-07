@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+*.local
+
+# Build output
+dist/
+build/
+
+# Uploads / evidence
+backend/uploads/evidence/*
+!backend/uploads/evidence/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+uvicorn.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
