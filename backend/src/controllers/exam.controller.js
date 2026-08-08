@@ -9,6 +9,7 @@ const {
   getActiveSession,
 } = require('../services/exam.service');
 const { emitAdmin } = require('../socket/socketServer');
+const { counterState } = require('../utils/sessionState');
 
 const start = asyncHandler(async (req, res) => {
   const { examTitle, deviceInfo } = req.body;
@@ -26,8 +27,10 @@ const start = asyncHandler(async (req, res) => {
         sessionId: session._id.toString(),
         examName: session.examName,
         status: session.status,
+        startTime: session.startTime,
         trustScore: session.trustScore,
         riskLevel: session.currentRisk,
+        counters: counterState(session),
       },
       'Exam session started. Monitoring is now live.'
     )
@@ -78,7 +81,9 @@ const active = asyncHandler(async (req, res) => {
             trustScore: session.trustScore,
             riskLevel: session.currentRisk,
             violationCount: session.violationCount,
+            warningLevel: session.warningLevel,
             autoEnded: session.autoEnded,
+            counters: counterState(session),
           }
         : null,
       'Active session.'

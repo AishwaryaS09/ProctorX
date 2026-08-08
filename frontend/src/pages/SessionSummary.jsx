@@ -98,6 +98,13 @@ export default function SessionSummary() {
         <StatCell label="Looking away" value={summary.lookingAway} />
       </div>
 
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCell label="Browser events" value={summary.browserEvents} />
+        <StatCell label="Browser inactive" value={summary.browserInactive} />
+        <StatCell label="Fullscreen exits" value={summary.fullscreenExits} />
+        <StatCell label="Warnings" value={summary.warningCount} />
+      </div>
+
       <div className="card mt-6">
         <h2 className="mb-3 text-base font-semibold text-slate-900">Violations</h2>
         {summary.violations.length === 0 ? (

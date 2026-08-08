@@ -1,5 +1,6 @@
 const {
   FACE_STATE_TO_VIOLATION,
+  FACE_STATUS_COUNTER,
   browserViolationFor,
 } = require('../config/constants');
 const FaceEvent = require('../models/FaceEvent');
@@ -8,11 +9,31 @@ const Violation = require('../models/Violation');
 const { recordViolation } = require('./trust.service');
 const { emitSession } = require('../socket/socketServer');
 const { riskFor } = require('../utils/formatters');
+const { counterState } = require('../utils/sessionState');
+
+/**
+ * Tracks the last *non-ERROR* face status per session (in-memory) so that a
+ * FACE violation is recorded on a state transition (e.g. PRESENT -> ABSENT)
+ * rather than on every frame of a sustained absence. This mirrors real
+ * proctoring behaviour: leaving the camera triggers one violation, returning
+ * resets, and leaving again triggers another.
+ */
+const lastFaceStatusBySession = new Map();
+
+function trackFaceStatus(sessionId, faceStatus) {
+  const key = sessionId.toString();
+  const previous = lastFaceStatusBySession.get(key);
+  if (faceStatus !== 'ERROR') {
+    lastFaceStatusBySession.set(key, faceStatus);
+  }
+  return previous;
+}
 
 /**
  * Persist a face analysis result for a session. When the AI reports a
- * violation state (ABSENT / MULTIPLE / LOOKING_AWAY / ERROR) a violation is
- * recorded through the trust engine.
+ * violation state (ABSENT / MULTIPLE / LOOKING_AWAY) AND that state is a
+ * transition from the previous analysed frame, a violation is recorded
+ * through the trust engine.
  */
 async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
   const faceStatus = result.faceStatus || result.face_status || 'ERROR';
@@ -30,24 +51,36 @@ async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
     screenshotPath: screenshotPath || undefined,
   });
 
+  const counterField = FACE_STATUS_COUNTER[faceStatus];
+  if (counterField) {
+    session[counterField] = (session[counterField] || 0) + 1;
+    await session.save();
+  }
+
   emitSession(session._id, 'face_event', {
     id: event._id.toString(),
     faceStatus,
     faceCount,
     confidence,
     remark,
+    counters: counterState(session),
     createdAt: event.createdAt,
   });
 
-  const violationType = FACE_STATE_TO_VIOLATION[faceStatus];
   let violation = null;
-  if (violationType) {
-    violation = await recordViolation({
-      session,
-      violationType,
-      message: remark,
-      metadata: { source: 'face', faceStatus, faceCount, screenshotPath },
-    });
+  const violationType = FACE_STATE_TO_VIOLATION[faceStatus];
+  if (violationType && faceStatus !== 'ERROR') {
+    const previous = trackFaceStatus(session._id, faceStatus);
+    if (previous !== faceStatus) {
+      violation = await recordViolation({
+        session,
+        violationType,
+        message: remark,
+        metadata: { source: 'face', faceStatus, faceCount, screenshotPath },
+      });
+    }
+  } else {
+    trackFaceStatus(session._id, faceStatus);
   }
 
   return { event, violation };
@@ -55,6 +88,7 @@ async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
 
 /**
  * Persist a browser activity event. Suspicious statuses map to violations.
+ * Each discrete browser event is treated independently (no transition gate).
  */
 async function recordBrowserEvent({ session, candidate, status, eventName, detail }) {
   const violationType = browserViolationFor(status, eventName);
@@ -69,16 +103,25 @@ async function recordBrowserEvent({ session, candidate, status, eventName, detai
     isViolation,
   });
 
+  let violation = null;
+  if (violationType) {
+    session.browserViolationCount = (session.browserViolationCount || 0) + 1;
+    if (violationType === 'FULLSCREEN_EXIT') {
+      session.fullscreenExitCount = (session.fullscreenExitCount || 0) + 1;
+    }
+    await session.save();
+  }
+
   emitSession(session._id, 'browser_event', {
     id: event._id.toString(),
     status,
     eventName,
     detail,
     isViolation,
+    counters: counterState(session),
     createdAt: event.createdAt,
   });
 
-  let violation = null;
   if (violationType) {
     violation = await recordViolation({
       session,
@@ -115,6 +158,7 @@ async function currentState(session) {
     trustScore,
     riskLevel: riskFor(trustScore),
     violationCount,
+    counters: counterState(session),
     lastFaceEvents: recentEvents,
   };
 }

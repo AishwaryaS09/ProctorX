@@ -40,17 +40,17 @@ async function requestPython(path, body) {
  * Normalises snake_case responses from the Python service into camelCase.
  */
 async function analyzeFrame(imageBase64) {
-  const data = await requestPython('/analyze-frame', { image: imageBase64 });
+  const data = await requestPython('/api/ai/analyze-frame', { image: imageBase64 });
   return normalizeFaceResult(data);
 }
 
 async function detectFace(imageBase64) {
-  const data = await requestPython('/detect-face', { image: imageBase64 });
+  const data = await requestPython('/api/ai/detect-face', { image: imageBase64 });
   return normalizeFaceResult(data);
 }
 
 async function validateFrame(imageBase64) {
-  return requestPython('/validate-frame', { image: imageBase64 });
+  return requestPython('/api/ai/validate-frame', { image: imageBase64 });
 }
 
 function normalizeFaceResult(data) {

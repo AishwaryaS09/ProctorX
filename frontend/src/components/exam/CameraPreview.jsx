@@ -3,17 +3,33 @@ import { CameraIcon } from '../common/icons.jsx';
 import { FACE_STATUS_META } from '../../utils/constants.js';
 
 /**
- * Webcam preview with a frame-capture loop.
- * Captures a JPEG frame every `intervalMs` and hands the base64 data URL to
- * `onFrame`. The actual analysis happens on the backend (Node -> Python).
+ * Webcam preview with a gated frame-capture loop.
+ * - The camera stream is acquired on mount and shown as a live preview.
+ * - Frames are only captured while `active` is true (monitoring started).
+ * - After the stream is ready, an initial `warmupMs` window lets the camera
+ *   stabilize before the first frame is analysed.
+ * - `onReady` / `onError` let the parent track camera initialization state.
  */
-export default function CameraPreview({ onFrame, faceStatus = null, intervalMs = 3000 }) {
+export default function CameraPreview({
+  onFrame,
+  faceStatus = null,
+  intervalMs = 3000,
+  active = true,
+  warmupMs = 2500,
+  onReady,
+  onError,
+}) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const [error, setError] = useState(null);
   const [ready, setReady] = useState(false);
   const intervalRef = useRef(null);
+  const warmupTimerRef = useRef(null);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
+  onReadyRef.current = onReady;
+  onErrorRef.current = onError;
 
   useEffect(() => {
     let cancelled = false;
@@ -33,9 +49,15 @@ export default function CameraPreview({ onFrame, faceStatus = null, intervalMs =
           videoRef.current.srcObject = stream;
           await videoRef.current.play().catch(() => {});
           setReady(true);
+          onReadyRef.current?.();
         }
       } catch (err) {
-        setError(err.name === 'NotAllowedError' ? 'Camera permission denied.' : 'Unable to access the camera.');
+        const message =
+          err.name === 'NotAllowedError'
+            ? 'Camera permission denied.'
+            : 'Unable to access the camera.';
+        setError(message);
+        onErrorRef.current?.(message);
       }
     }
 
@@ -46,9 +68,9 @@ export default function CameraPreview({ onFrame, faceStatus = null, intervalMs =
       stopCapture();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const captureFrame = () => {
@@ -67,12 +89,11 @@ export default function CameraPreview({ onFrame, faceStatus = null, intervalMs =
     }
   };
 
-  const startCapture = () => {
-    stopCapture();
-    intervalRef.current = setInterval(captureFrame, intervalMs);
-  };
-
   const stopCapture = () => {
+    if (warmupTimerRef.current) {
+      clearTimeout(warmupTimerRef.current);
+      warmupTimerRef.current = null;
+    }
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -80,10 +101,18 @@ export default function CameraPreview({ onFrame, faceStatus = null, intervalMs =
   };
 
   useEffect(() => {
-    if (ready) startCapture();
+    if (!ready || !active) {
+      stopCapture();
+      return undefined;
+    }
+    // Let the camera stabilize before analysing the first frame.
+    warmupTimerRef.current = setTimeout(() => {
+      warmupTimerRef.current = null;
+      captureFrame();
+      intervalRef.current = setInterval(captureFrame, intervalMs);
+    }, warmupMs);
     return stopCapture;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, intervalMs]);
+  }, [ready, active, intervalMs, warmupMs]);
 
   const meta = FACE_STATUS_META[faceStatus] || null;
 
@@ -103,7 +132,7 @@ export default function CameraPreview({ onFrame, faceStatus = null, intervalMs =
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
           <CameraIcon className="h-10 w-10 text-slate-500" />
           <p className="text-sm text-red-400">{error}</p>
-          <p className="text-xs text-slate-400">Grant camera permission and reload the page.</p>
+          <p className="text-xs text-slate-400">Camera access is required for the exam.</p>
         </div>
       )}
 

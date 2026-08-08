@@ -1,7 +1,12 @@
 """OpenCV face detection engine.
 
-Pure port of the reference implementation:
+Pure port of the reference implementation, hardened so a normal candidate is
+reliably classified as PRESENT:
+
 * Haar cascade face detection (frontal face default classifier).
+* CLAHE contrast enhancement before detection (robust under uneven lighting).
+* Two-pass detection: the configured pass, then a relaxed pass that trades a
+  little precision to avoid missing a legitimate face.
 * State classification: PRESENT / ABSENT / MULTIPLE / LOOKING_AWAY / ERROR.
 * "Looking away" fires when a single face drifts from the frame centre.
 """
@@ -19,6 +24,47 @@ def get_face_cascade():
         cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         _face_cascade = cv2.CascadeClassifier(cascade_path)
     return _face_cascade
+
+
+def _prepare_gray(frame):
+    """Grayscale + CLAHE. Haar cascades are sensitive to lighting; equalising
+    the histogram dramatically improves detection of an ordinary webcam face."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return clahe.apply(gray)
+
+
+def _detect(gray, cascade, scale_factor, min_neighbors, min_size):
+    return cascade.detectMultiScale(
+        gray,
+        scaleFactor=scale_factor,
+        minNeighbors=min_neighbors,
+        minSize=(min_size, min_size),
+    )
+
+
+def _detect_faces(gray):
+    """Two-pass detection.
+
+    The first pass uses the configured (strict) parameters. If nothing is
+    found we re-run with relaxed parameters — a lower minNeighbors and a
+    smaller minSize — so that a face that is slightly smaller, angled or under
+    poor lighting is still detected instead of being reported as ABSENT.
+    """
+    cascade = get_face_cascade()
+
+    faces = _detect(gray, cascade, Config.SCALE_FACTOR, Config.MIN_NEIGHBORS, Config.MIN_FACE_SIZE)
+
+    if len(faces) == 0:
+        faces = _detect(
+            gray,
+            cascade,
+            1.08,
+            max(1, Config.MIN_NEIGHBORS - 2),
+            max(20, Config.MIN_FACE_SIZE // 2),
+        )
+
+    return faces
 
 
 def _confidence_for(boxes, frame_shape):
@@ -48,14 +94,8 @@ def analyze_frame_array(frame):
             "remark": "Could not decode image data",
         }
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    cascade = get_face_cascade()
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=Config.SCALE_FACTOR,
-        minNeighbors=Config.MIN_NEIGHBORS,
-        minSize=(Config.MIN_FACE_SIZE, Config.MIN_FACE_SIZE),
-    )
+    gray = _prepare_gray(frame)
+    faces = _detect_faces(gray)
     boxes = [[int(x), int(y), int(w), int(h)] for (x, y, w, h) in faces]
     face_count = len(boxes)
     confidence = _confidence_for(boxes, frame.shape)

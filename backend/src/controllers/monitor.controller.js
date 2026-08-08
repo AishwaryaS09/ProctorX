@@ -8,6 +8,7 @@ const ApiError = require('../utils/ApiError');
 const ExamSession = require('../models/ExamSession');
 const { analyzeFrame } = require('../ai/pythonClient.service');
 const { recordFaceEvent, recordBrowserEvent, currentState } = require('../services/event.service');
+const { counterState } = require('../utils/sessionState');
 const { env } = require('../config/env');
 
 /**
@@ -73,17 +74,8 @@ const submitFrame = asyncHandler(async (req, res) => {
         faceCount: result.faceCount,
         confidence: result.confidence,
         remark: result.remark,
-        violation: violation
-          ? {
-              type: violation.violationType,
-              severity: violation.severity,
-              points: violation.points,
-              trustScore: violation.trustScore,
-              riskLevel: violation.riskLevel,
-              warningLevel: violation.warningLevel,
-              autoEnded: violation.autoEnded,
-            }
-          : null,
+        counters: counterState(session),
+        violation: violation ? { ...violation } : null,
       },
       'Frame analyzed.'
     )
@@ -117,17 +109,8 @@ const submitBrowserEvent = asyncHandler(async (req, res) => {
     ApiResponse.ok(
       {
         isViolation: Boolean(violation),
-        violation: violation
-          ? {
-              type: violation.violationType,
-              severity: violation.severity,
-              points: violation.points,
-              trustScore: violation.trustScore,
-              riskLevel: violation.riskLevel,
-              warningLevel: violation.warningLevel,
-              autoEnded: violation.autoEnded,
-            }
-          : null,
+        counters: counterState(session),
+        violation: violation ? { ...violation } : null,
       },
       'Browser event recorded.'
     )

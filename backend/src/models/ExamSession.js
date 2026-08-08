@@ -25,6 +25,9 @@ const examSessionSchema = new mongoose.Schema(
     faceAbsentCount: { type: Number, default: 0, min: 0 },
     faceMultipleCount: { type: Number, default: 0, min: 0 },
     faceLookingAwayCount: { type: Number, default: 0, min: 0 },
+    /** Cumulative browser-related counters (mirrored by Violation documents). */
+    browserViolationCount: { type: Number, default: 0, min: 0 },
+    fullscreenExitCount: { type: Number, default: 0, min: 0 },
     autoEnded: { type: Boolean, default: false },
     finalRemarks: { type: String, trim: true, maxlength: 500 },
     deviceInfo: {

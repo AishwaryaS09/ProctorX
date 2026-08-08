@@ -8,6 +8,7 @@ const {
 
 const { env } = require('../config/env');
 const { riskFor } = require('../utils/formatters');
+const { counterState, liveState } = require('../utils/sessionState');
 const Violation = require('../models/Violation');
 const { emitSession, emitAdmin } = require('../socket/socketServer');
 const { logAudit } = require('./audit.service');
@@ -79,14 +80,11 @@ async function recordViolation({ session, violationType, message, metadata = {} 
     warningLevel: warningLevel ? `WARNING_${warningLevel}` : null,
     warningMessage: warningLevel ? WARNING_MESSAGES[warningLevel] : null,
     autoEnded,
+    counters: counterState(session),
   };
 
   emitSession(session._id, 'violation', result);
-  emitSession(session._id, 'session_update', {
-    trustScore: session.trustScore,
-    riskLevel: session.currentRisk,
-    violationCount: session.violationCount,
-  });
+  emitSession(session._id, 'session_update', liveState(session));
   emitAdmin('violation', { sessionId: session._id.toString(), ...result });
 
   return result;

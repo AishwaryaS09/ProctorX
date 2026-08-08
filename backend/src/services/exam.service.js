@@ -109,6 +109,8 @@ async function getSessionSummary(session, candidate) {
     (browserSummary.UNFOCUSED || 0) +
     (browserSummary.minimized || 0);
 
+  const browserEventsTotal = Object.values(browserSummary).reduce((sum, count) => sum + count, 0);
+
   return {
     sessionId: session._id.toString(),
     candidateName: candidate ? candidate.name : 'Unknown',
@@ -128,6 +130,9 @@ async function getSessionSummary(session, candidate) {
     faceError: faceSummary.ERROR || 0,
     browserActive: browserSummary.ACTIVE || 0,
     browserInactive,
+    browserEvents: browserEventsTotal,
+    fullscreenExits: browserSummary.fullscreen_exit || browserSummary.FULLSCREEN_EXIT || 0,
+    warningCount: warnings.length,
     trustScore: session.trustScore,
     riskLevel: session.currentRisk,
     violationCount: session.violationCount,

@@ -18,7 +18,7 @@ const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
   jwtCookieName: process.env.JWT_COOKIE_NAME || 'proctorx_token',
   aiServiceUrl: process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000',
-  aiServiceTimeoutMs: parseInt(process.env.AI_SERVICE_TIMEOUT_MS, 10) || 5000,
+  aiServiceTimeoutMs: parseInt(process.env.AI_SERVICE_TIMEOUT_MS, 10) || 10000,
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || 'Admin@12345',
   adminEmail: process.env.ADMIN_EMAIL || 'admin@proctorx.dev',

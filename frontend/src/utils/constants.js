@@ -19,6 +19,18 @@ export const STATUS_STYLES = {
 
 export const EXAM_DURATION_MINUTES = 60;
 
+export const EXAM_INSTRUCTIONS = [
+  'Ensure only one person is visible.',
+  'Keep your face inside the camera frame.',
+  'Maintain fullscreen throughout the exam.',
+  'Do not switch browser tabs.',
+  'Do not minimize the browser.',
+  'Keep the camera enabled.',
+  'A stable internet connection is required.',
+  'Violations reduce your trust score.',
+  'Excessive violations automatically end the exam.',
+];
+
 export const VIOLATION_META = {
   FACE_ABSENT: { label: 'Face Absent', points: 5 },
   MULTIPLE_FACES: { label: 'Multiple Faces', points: 10 },

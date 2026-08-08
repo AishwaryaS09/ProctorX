@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../api/dashboard.api.js';
-import { examApi } from '../api/exam.api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import StatCard from '../components/common/StatCard.jsx';
 import Spinner from '../components/common/Spinner.jsx';
@@ -35,17 +34,9 @@ export default function Dashboard() {
     load();
   }, [load]);
 
-  const startExam = async () => {
+  const startExam = () => {
     setStarting(true);
-    try {
-      const { data } = await examApi.start({ deviceInfo: {} });
-      toast('success', 'Exam session started.');
-      navigate(`/exam/${data.sessionId}`);
-    } catch (err) {
-      toast('error', err.message || 'Could not start the exam.');
-    } finally {
-      setStarting(false);
-    }
+    navigate('/exam/new');
   };
 
   if (loading) return <SkeletonPage />;
