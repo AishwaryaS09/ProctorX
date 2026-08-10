@@ -12,11 +12,12 @@ const { emitAdmin } = require('../socket/socketServer');
 const { counterState } = require('../utils/sessionState');
 
 const start = asyncHandler(async (req, res) => {
-  const { examTitle, deviceInfo } = req.body;
+  const { examTitle, deviceInfo, verified } = req.body;
   const session = await startSession({
     candidate: req.user,
     examTitle,
     deviceInfo: deviceInfo || {},
+    verified: verified || {},
   });
 
   emitAdmin('session_started', { sessionId: session._id.toString(), examName: session.examName });

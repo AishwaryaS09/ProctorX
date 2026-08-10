@@ -60,7 +60,7 @@ const submitFrame = asyncHandler(async (req, res) => {
   }
 
   const screenshotPath = saveEvidenceFrame(req.body.image, session._id.toString());
-  const { violation } = await recordFaceEvent({
+  const { violation, absentDurationSeconds } = await recordFaceEvent({
     session,
     candidate: req.user,
     result,
@@ -74,6 +74,7 @@ const submitFrame = asyncHandler(async (req, res) => {
         faceCount: result.faceCount,
         confidence: result.confidence,
         remark: result.remark,
+        absentDurationSeconds: absentDurationSeconds || 0,
         counters: counterState(session),
         violation: violation ? { ...violation } : null,
       },

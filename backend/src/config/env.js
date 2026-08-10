@@ -27,7 +27,7 @@ const env = {
   screenshotEnabled: parseBool(process.env.SCREENSHOT_ENABLED, true),
   evidenceDir: process.env.EVIDENCE_DIR || path.join(__dirname, '..', '..', 'uploads', 'evidence'),
   warningLevels: (process.env.WARNING_LEVELS || '1,2,3').split(',').map((v) => parseInt(v.trim(), 10)).filter((v) => !Number.isNaN(v)),
-  autoEndThreshold: parseInt(process.env.AUTO_END_THRESHOLD, 10) || 5,
+  autoEndThreshold: parseInt(process.env.AUTO_END_THRESHOLD, 10) || 3,
   screenshotSeverityBelow: process.env.SCREENSHOT_SEVERITY_BELOW || 'MEDIUM',
 };
 

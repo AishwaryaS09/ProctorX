@@ -80,6 +80,7 @@ async function recordViolation({ session, violationType, message, metadata = {} 
     warningLevel: warningLevel ? `WARNING_${warningLevel}` : null,
     warningMessage: warningLevel ? WARNING_MESSAGES[warningLevel] : null,
     autoEnded,
+    faceCount: metadata.faceCount || null,
     counters: counterState(session),
   };
 

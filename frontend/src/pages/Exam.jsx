@@ -5,17 +5,13 @@ import { monitorApi } from '../api/monitor.api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useSocket } from '../hooks/useSocket.js';
 import CameraPreview from '../components/exam/CameraPreview.jsx';
-import WarningBanner from '../components/exam/WarningBanner.jsx';
 import EventTimeline from '../components/exam/EventTimeline.jsx';
-import LiveStatCard from '../components/exam/LiveStatCard.jsx';
 import ViolationToasts from '../components/exam/ViolationToasts.jsx';
-import TrustMeter from '../components/ui/TrustMeter.jsx';
-import RiskBadge from '../components/ui/RiskBadge.jsx';
 import ConfirmDialog from '../components/ui/ConfirmDialog.jsx';
 import Spinner from '../components/common/Spinner.jsx';
 import {
-  FACE_STATUS_META,
   VIOLATION_META,
+  VIOLATION_THRESHOLD,
   EXAM_DURATION_MINUTES,
   EXAM_INSTRUCTIONS,
 } from '../utils/constants.js';
@@ -97,6 +93,16 @@ function InitOverlay({ stage, checks }) {
   );
 }
 
+function CounterChip({ label, value, tone }) {
+  const color =
+    tone === 'red' ? 'text-red-300' : tone === 'amber' ? 'text-amber-300' : 'text-slate-200';
+  return (
+    <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-slate-300 ring-1 ring-white/15">
+      {label}: <span className={color}>{value}</span>
+    </span>
+  );
+}
+
 export default function Exam() {
   const { sessionId: paramId } = useParams();
   const isNew = paramId === 'new';
@@ -117,11 +123,10 @@ export default function Exam() {
   const [initChecks, setInitChecks] = useState([]);
 
   const [faceStatus, setFaceStatus] = useState(null);
-  const [browserStatus, setBrowserStatus] = useState('ACTIVE');
+  const [absentSeconds, setAbsentSeconds] = useState(0);
   const [trust, setTrust] = useState(100);
   const [risk, setRisk] = useState('LOW');
   const [violationCount, setViolationCount] = useState(0);
-  const [warning, setWarning] = useState(null);
   const [events, setEvents] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [counters, setCounters] = useState(ZERO_COUNTERS);
@@ -129,14 +134,16 @@ export default function Exam() {
   const [ending, setEnding] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [aiDown, setAiDown] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const [timeLeft, setTimeLeft] = useState(EXAM_DURATION_MINUTES * 60);
 
   const timeUpRef = useRef(false);
   const trustRef = useRef(100);
-  const lastLoggedFaceRef = useRef(null);
+  const faceVisibleRef = useRef(false);
   const cameraReadyLoggedRef = useRef(false);
   const lastViolationIdRef = useRef(null);
   const autoEndedRef = useRef(false);
+  const monitoringRef = useRef(true);
   const redirectTimer = useRef(null);
 
   const { socket, connected } = useSocket(phase === 'live' ? resolvedSessionId : null);
@@ -152,18 +159,39 @@ export default function Exam() {
     ].slice(0, 200));
   }, []);
 
+  const pushStatus = useCallback(
+    (title, sub, opts = {}) => {
+      setNotifications((prev) =>
+        [
+          {
+            id: nextEventId(),
+            tone: opts.tone || 'positive',
+            title,
+            sub,
+            points: opts.points || 0,
+            from: opts.from,
+            to: opts.to,
+            reason: opts.reason,
+          },
+          ...prev,
+        ].slice(0, 5)
+      );
+    },
+    []
+  );
+
   const handleAutoEnded = useCallback(() => {
     if (autoEndedRef.current) return;
     autoEndedRef.current = true;
+    monitoringRef.current = false;
     setAutoEnded(true);
     setPhase('ended');
-    addEvent({ kind: 'session', status: 'Exam Ended', message: 'Session auto-ended after excessive violations.' });
-    toast('warning', 'Session auto-ended after too many violations.');
+    toast('warning', 'Maximum violations reached. Examination ended.');
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (resolvedSessionId) {
-      redirectTimer.current = setTimeout(() => navigate(`/sessions/${resolvedSessionId}`), 4000);
+      redirectTimer.current = setTimeout(() => navigate(`/sessions/${resolvedSessionId}`), 3500);
     }
-  }, [navigate, resolvedSessionId, toast, addEvent]);
+  }, [navigate, resolvedSessionId, toast]);
 
   const applyViolation = useCallback(
     (v) => {
@@ -176,34 +204,57 @@ export default function Exam() {
       if (v.riskLevel) setRisk(v.riskLevel);
       if (v.violationCount !== undefined) setViolationCount(v.violationCount);
       if (v.counters) setCounters(v.counters);
-      if (v.warningLevel) {
-        const level = parseInt(String(v.warningLevel).replace('WARNING_', ''), 10) || 1;
-        setWarning({ level, message: v.warningMessage || 'Suspicious activity detected.' });
-        addEvent({ kind: 'warning', level: v.warningLevel, message: v.warningMessage });
-      }
-      addEvent({
-        kind: 'violation',
-        type: v.violationType,
-        message: `${VIOLATION_META[v.violationType]?.label || v.violationType} detected (-${v.points} trust) · ${prevTrust} → ${v.trustScore}`,
+
+      const title =
+        v.violationType === 'MULTIPLE_FACES'
+          ? v.faceCount && v.faceCount > 1
+            ? `${v.faceCount} FACES DETECTED`
+            : 'MULTIPLE FACES DETECTED'
+          : VIOLATION_META[v.violationType]?.label || v.violationType;
+
+      const count = v.violationCount || 1;
+      const remaining = VIOLATION_THRESHOLD - count;
+      const reason =
+        remaining > 0
+          ? `${remaining} more violation${remaining > 1 ? 's' : ''} will end your test.`
+          : 'Maximum violations reached. Examination ended.';
+
+      addEvent({ tone: 'violation', label: title, message: reason });
+      pushStatus(title, `Violation ${count} of ${VIOLATION_THRESHOLD}`, {
+        tone: 'violation',
+        points: v.points,
+        from: prevTrust,
+        to: v.trustScore,
+        reason,
       });
-      setNotifications((prev) => [
-        {
-          id: nextEventId(),
-          number: v.violationCount,
-          type: v.violationType,
-          points: v.points,
-          reason: v.warningMessage || `${VIOLATION_META[v.violationType]?.label || v.violationType}`,
-          from: prevTrust,
-          to: v.trustScore,
-        },
-        ...prev,
-      ].slice(0, 5));
       if (v.autoEnded) handleAutoEnded();
     },
-    [addEvent, handleAutoEnded]
+    [addEvent, pushStatus, handleAutoEnded]
   );
 
-  // Auto-dismiss violation notifications (oldest first).
+  // Centralised face-status handler used by both socket events and REST frames.
+  // Shows the GREEN "Face Detected" popup only when a face is detected again
+  // after not being visible (not on every frame).
+  const handleFaceStatus = useCallback(
+    (status, seconds) => {
+      setFaceStatus(status);
+      if (typeof seconds === 'number') setAbsentSeconds(seconds);
+      if (status === 'PRESENT') {
+        if (!faceVisibleRef.current) {
+          faceVisibleRef.current = true;
+          addEvent({ tone: 'positive', label: 'Face Detected', message: 'Face is visible.' });
+          pushStatus('Face Detected');
+        }
+      } else if (status === 'LOOKING_AWAY') {
+        faceVisibleRef.current = true;
+      } else {
+        faceVisibleRef.current = false;
+      }
+    },
+    [addEvent, pushStatus]
+  );
+
+  // Auto-dismiss notifications (oldest first).
   useEffect(() => {
     if (!notifications.length) return undefined;
     const t = setTimeout(() => setNotifications((prev) => prev.slice(0, -1)), 6000);
@@ -231,8 +282,6 @@ export default function Exam() {
             navigate('/dashboard');
             return;
           }
-          // An active session already exists (resume or duplicate start) —
-          // skip the instructions screen and re-initialize monitoring.
           setPhase('initializing');
         } else if (!isNew) {
           toast('error', 'No active session found.');
@@ -264,19 +313,11 @@ export default function Exam() {
       if (s.counters) setCounters(s.counters);
     };
     const onFaceEvent = (e) => {
-      setFaceStatus(e.faceStatus);
+      handleFaceStatus(e.faceStatus, e.absentDurationSeconds);
       if (e.counters) setCounters(e.counters);
-      if (lastLoggedFaceRef.current !== e.faceStatus) {
-        lastLoggedFaceRef.current = e.faceStatus;
-        addEvent({ kind: 'face', status: e.faceStatus, message: e.remark });
-      }
     };
     const onBrowserEvent = (e) => {
-      setBrowserStatus(e.status || e.eventName || 'ACTIVE');
       if (e.counters) setCounters(e.counters);
-      if (e.isViolation || (e.status && e.status !== 'active' && e.status !== 'tab_visible')) {
-        addEvent({ kind: 'browser', status: e.status, eventName: e.eventName, message: e.detail });
-      }
     };
     const onSessionEnded = (e) => {
       if (e.autoEnded) handleAutoEnded();
@@ -294,13 +335,14 @@ export default function Exam() {
       socket.off('browser_event', onBrowserEvent);
       socket.off('session_ended', onSessionEnded);
     };
-  }, [socket, applyViolation, addEvent, handleAutoEnded]);
+  }, [socket, applyViolation, handleFaceStatus, handleAutoEnded]);
 
   // Browser activity monitoring (only while the exam is live).
   useEffect(() => {
     if (phase !== 'live') return undefined;
 
     const send = (payload) => {
+      if (!monitoringRef.current) return; // already ending — skip any further events
       monitorApi
         .submitBrowserEvent({ sessionId: resolvedSessionId, ...payload })
         .then(({ data }) => {
@@ -322,13 +364,15 @@ export default function Exam() {
     };
 
     const onFullscreen = () => {
-      if (!document.fullscreenElement) {
+      if (document.fullscreenElement) {
+        send({ status: 'fullscreen_entered', eventName: 'fullscreenchange', detail: 'Fullscreen active' });
+      } else {
         send({ status: 'fullscreen_exit', eventName: 'fullscreenchange', detail: 'Fullscreen exited' });
       }
     };
 
     const onBlur = () => {
-      if (document.hidden) return; // tab switch already reported as TAB_CHANGED
+      if (document.hidden) return; // tab switch already reported
       send({ status: 'window_blur', eventName: 'blur', detail: 'Window lost focus' });
     };
     const onFocus = () => send({ status: 'active', eventName: 'focus', detail: 'Window focused' });
@@ -408,12 +452,12 @@ export default function Exam() {
     setNotifications([]);
     setAutoEnded(false);
     autoEndedRef.current = false;
+    monitoringRef.current = true;
     setEnding(false);
     setAiDown(false);
     setFaceStatus(null);
-    setBrowserStatus('ACTIVE');
-    setWarning(null);
-    lastLoggedFaceRef.current = null;
+    setAbsentSeconds(0);
+    faceVisibleRef.current = false;
     timeUpRef.current = false;
 
     let id = resolvedSessionId;
@@ -424,6 +468,7 @@ export default function Exam() {
             userAgent: navigator.userAgent,
             screenSize: `${window.screen.width}x${window.screen.height}`,
           },
+          verified: { camera: cameraGranted, fullscreen: fullscreenGranted },
         });
         id = data.sessionId;
         setResolvedSessionId(id);
@@ -441,14 +486,16 @@ export default function Exam() {
       }
     }
 
-    addEvent({ kind: 'session', status: 'Exam Started', message: 'Examination session initialized.' });
+    addEvent({ tone: 'positive', label: 'Camera Permission Approved', message: 'Webcam access granted.' });
+    addEvent({ tone: 'positive', label: 'Fullscreen Accepted', message: 'Fullscreen mode active.' });
+    pushStatus('Camera Permission Approved');
+    pushStatus('Fullscreen Accepted');
   };
 
   const handleCameraReady = useCallback(() => {
     if (cameraReadyLoggedRef.current) return;
     cameraReadyLoggedRef.current = true;
-    addEvent({ kind: 'session', status: 'Camera Started', message: 'Webcam stream initialized.' });
-  }, [addEvent]);
+  }, []);
 
   // Delayed monitoring start: sequential status messages, then go live.
   useEffect(() => {
@@ -465,19 +512,17 @@ export default function Exam() {
     );
     timers.push(
       setTimeout(() => {
-        addEvent({ kind: 'session', status: 'AI Monitoring Started', message: 'AI face monitoring is active.' });
-        addEvent({ kind: 'session', status: 'Browser Monitoring Started', message: 'Browser activity is being logged.' });
-        addEvent({ kind: 'session', status: 'Event Logging Started', message: 'All monitoring events are recorded.' });
-        addEvent({ kind: 'session', status: 'Monitoring Active', message: 'Examination monitoring is now live.' });
+        addEvent({ tone: 'positive', label: 'Monitoring Active', message: 'Examination monitoring is now live.' });
+        pushStatus('Monitoring Active');
         setPhase('live');
       }, 600 * INIT_MESSAGES.length + 1400)
     );
     return () => timers.forEach(clearTimeout);
-  }, [phase, addEvent]);
+  }, [phase, addEvent, pushStatus]);
 
   const handleFrame = useCallback(
     async (image) => {
-      if (!resolvedSessionId) return;
+      if (!resolvedSessionId || !monitoringRef.current) return;
       try {
         const { data } = await monitorApi.submitFrame({ sessionId: resolvedSessionId, image });
         if (data.aiUnavailable) {
@@ -485,14 +530,14 @@ export default function Exam() {
           return;
         }
         setAiDown(false);
-        setFaceStatus(data.faceStatus);
+        handleFaceStatus(data.faceStatus, data.absentDurationSeconds);
         if (data.counters) setCounters(data.counters);
         if (data.violation) applyViolation(data.violation);
       } catch {
         // transient network error; keep going
       }
     },
-    [resolvedSessionId, applyViolation]
+    [resolvedSessionId, applyViolation, handleFaceStatus]
   );
 
   // Countdown ticker while the session is live.
@@ -506,6 +551,7 @@ export default function Exam() {
   useEffect(() => {
     if (phase !== 'live' || timeLeft > 0 || timeUpRef.current) return undefined;
     timeUpRef.current = true;
+    monitoringRef.current = false;
     setEnding(true);
     toast('info', 'Time limit reached. Ending the session automatically…');
     examApi
@@ -518,21 +564,27 @@ export default function Exam() {
       .catch((err) => {
         toast('error', err.message || 'Could not end the session.');
         timeUpRef.current = false;
+        monitoringRef.current = true;
         setEnding(false);
       });
   }, [phase, timeLeft, resolvedSessionId, navigate, toast]);
 
+  // End Test: stop monitoring first (browser listener cleanup happens when the
+  // phase flips to 'ended'), then exit fullscreen so cleanup never counts as a
+  // FULLSCREEN_EXIT violation.
   const endSession = async () => {
+    if (ending) return;
     setEnding(true);
-    addEvent({ kind: 'session', status: 'Exam Ended', message: 'Session ended by candidate.' });
+    monitoringRef.current = false;
     try {
       await examApi.end(resolvedSessionId);
       setPhase('ended');
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      toast('success', 'Session ended. Generating summary…');
+      toast('success', 'Examination completed. Generating summary…');
       navigate(`/sessions/${resolvedSessionId}`);
     } catch (err) {
       toast('error', err.message || 'Could not end the session.');
+      monitoringRef.current = true;
       setEnding(false);
     }
   };
@@ -602,93 +654,121 @@ export default function Exam() {
     );
   }
 
-  const faceMeta = FACE_STATUS_META[faceStatus];
-  const showCamera = phase === 'initializing' || phase === 'live';
+  const facePresent = faceStatus === 'PRESENT' || faceStatus === 'LOOKING_AWAY';
+  const trustColor =
+    trust >= 85 ? 'text-emerald-400' : trust >= 60 ? 'text-amber-400' : trust >= 35 ? 'text-orange-400' : 'text-red-400';
 
   return (
-    <div className="min-h-screen bg-slate-900 p-4 lg:p-6">
+    <div className="relative h-screen w-full overflow-hidden bg-slate-950">
       <ViolationToasts notifications={notifications} />
       {phase === 'initializing' && <InitOverlay stage={initStage} checks={initChecks} />}
 
-      <div className="mx-auto max-w-7xl space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-bold text-white">{session?.examName || 'Examination'}</h1>
-            <p className="text-xs text-slate-400">
-              Session {resolvedSessionId} · {connected ? '● Live' : '○ Connecting'} {aiDown ? '· AI offline' : ''}
+      <CameraPreview
+        className="absolute inset-0 h-full w-full"
+        onFrame={handleFrame}
+        faceStatus={faceStatus}
+        active={phase === 'live'}
+        onReady={handleCameraReady}
+        overlay={false}
+      />
+
+      {/* Top bar: exam name / timer | trust + End Test */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-3">
+        <div className="pointer-events-auto rounded-xl bg-slate-900/70 px-4 py-2 backdrop-blur">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            {session?.examName || 'Examination'}
+          </p>
+          <p className="text-[11px] text-slate-400">
+            {connected ? '● Live' : '○ Connecting'}
+            {aiDown ? ' · AI offline' : ''}
+          </p>
+          {phase === 'live' && (
+            <p
+              className={`mt-1 font-mono text-lg font-bold ${
+                timeLeft <= 300 ? 'text-red-300' : 'text-white'
+              }`}
+            >
+              ⏱ {formatCountdown(timeLeft)}
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {phase === 'live' && (
-              <span
-                className={`rounded-lg px-3 py-1.5 font-mono text-sm font-bold ring-1 ${
-                  timeLeft <= 300
-                    ? 'bg-red-500/20 text-red-300 ring-red-500/40'
-                    : 'bg-white/10 text-emerald-300 ring-white/20'
-                }`}
-              >
-                ⏱ {formatCountdown(timeLeft)}
-              </span>
-            )}
-            {autoEnded && (
-              <span className="rounded-full bg-red-500/20 px-3 py-1 text-xs font-semibold text-red-300 ring-1 ring-red-500/40">
-                Auto-ended · redirecting to summary…
-              </span>
-            )}
-            {phase === 'live' && (
-              <button className="btn-danger" onClick={() => setConfirmEnd(true)} disabled={ending}>
-                {ending ? 'Ending…' : 'End Examination'}
-              </button>
-            )}
-          </div>
+          )}
         </div>
 
-        {warning && !autoEnded && <WarningBanner level={warning.level} message={warning.message} />}
-        {autoEnded && (
-          <WarningBanner level={3} message="This session was auto-ended after the violation threshold was reached. You will be redirected to your summary." />
-        )}
-
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-          <LiveStatCard label="Face Present" value={counters.facePresent} accent="text-emerald-600" />
-          <LiveStatCard label="Face Absent" value={counters.faceAbsent} accent={counters.faceAbsent ? 'text-red-600' : 'text-slate-900'} />
-          <LiveStatCard label="Looking Away" value={counters.lookingAway} accent={counters.lookingAway ? 'text-amber-600' : 'text-slate-900'} />
-          <LiveStatCard label="Multiple Faces" value={counters.faceMultiple} accent={counters.faceMultiple ? 'text-orange-600' : 'text-slate-900'} />
-          <LiveStatCard label="Browser Violations" value={counters.browserViolations} accent={counters.browserViolations ? 'text-red-600' : 'text-slate-900'} />
-          <LiveStatCard label="Fullscreen Exits" value={counters.fullscreenExits} accent={counters.fullscreenExits ? 'text-red-600' : 'text-slate-900'} />
-          <LiveStatCard label="Warnings" value={counters.warnings} accent={counters.warnings ? 'text-amber-600' : 'text-slate-900'} />
-          <LiveStatCard label="Total Violations" value={counters.violations} accent={counters.violations ? 'text-red-600' : 'text-emerald-600'} />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            {showCamera && (
-              <CameraPreview
-                onFrame={handleFrame}
-                faceStatus={faceStatus}
-                active={phase === 'live'}
-                onReady={handleCameraReady}
-              />
-            )}
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <LiveStatCard label="Face" value={faceStatus ? faceMeta?.label : '—'} accent="text-slate-900" />
-              <LiveStatCard label="Browser" value={browserStatus.replace(/_/g, ' ')} accent="text-slate-900" />
-              <LiveStatCard label="Violations" value={violationCount} accent={violationCount > 0 ? 'text-red-600' : 'text-emerald-600'} />
-              <LiveStatCard label="Connection" value={connected ? 'Live' : 'Polling'} accent={connected ? 'text-emerald-600' : 'text-amber-500'} />
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="card flex flex-col items-center gap-3">
-              <TrustMeter score={trust} />
-              <RiskBadge risk={risk} />
-            </div>
-            <div className="card">
-              <h2 className="mb-2 text-sm font-semibold text-slate-900">Event log</h2>
-              <EventTimeline events={events} />
-            </div>
-          </div>
+        <div className="pointer-events-auto flex items-center gap-2">
+          <span className="rounded-xl bg-slate-900/70 px-4 py-2 text-center backdrop-blur">
+            <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">Trust</span>
+            <span className={`text-lg font-extrabold ${trustColor}`}>{trust}</span>
+          </span>
+          {phase === 'live' && (
+            <button className="btn-danger px-4 py-2" onClick={() => setConfirmEnd(true)} disabled={ending}>
+              {ending ? 'Ending…' : 'End Test'}
+            </button>
+          )}
         </div>
       </div>
+
+      {autoEnded && (
+        <div className="absolute inset-x-0 top-16 z-30 text-center">
+          <span className="rounded-full bg-red-500/20 px-4 py-1.5 text-xs font-semibold text-red-300 ring-1 ring-red-500/40 backdrop-blur">
+            Maximum violations reached. Redirecting to summary…
+          </span>
+        </div>
+      )}
+
+      {/* Live status strip: Face Present + absence duration + violation counters */}
+      {phase === 'live' && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-end justify-between gap-3 p-3">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl bg-slate-900/70 px-3 py-2 backdrop-blur">
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-bold ring-1 ${
+                facePresent
+                  ? 'bg-emerald-500/15 text-emerald-300 ring-emerald-500/40'
+                  : 'bg-red-500/15 text-red-300 ring-red-500/40'
+              }`}
+            >
+              Face Present: {facePresent ? 'YES' : 'NO'}
+            </span>
+            {!facePresent && absentSeconds > 0 && (
+              <span className="rounded-full bg-red-500/15 px-3 py-1 text-xs font-semibold text-red-300 ring-1 ring-red-500/40">
+                Face Absent: {absentSeconds}s
+              </span>
+            )}
+            <span className="ml-1 text-[11px] text-slate-400">
+              Risk: <span className={`font-semibold ${trustColor}`}>{risk}</span>
+            </span>
+          </div>
+
+          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5 rounded-xl bg-slate-900/70 px-3 py-2 backdrop-blur">
+            <CounterChip label="Absent" value={counters.faceAbsent} tone={counters.faceAbsent ? 'red' : ''} />
+            <CounterChip label="Multiple" value={counters.faceMultiple} tone={counters.faceMultiple ? 'red' : ''} />
+            <CounterChip label="Looking Away" value={counters.lookingAway} tone={counters.lookingAway ? 'amber' : ''} />
+            <CounterChip label="Browser Inactive" value={counters.browserViolations} tone={counters.browserViolations ? 'red' : ''} />
+            <CounterChip label="Fullscreen Exits" value={counters.fullscreenExits} tone={counters.fullscreenExits ? 'red' : ''} />
+            <CounterChip label="Warnings" value={counters.warnings} tone={counters.warnings ? 'amber' : ''} />
+            <CounterChip
+              label="Violations"
+              value={`${violationCount}/${VIOLATION_THRESHOLD}`}
+              tone={violationCount ? 'red' : 'amber'}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Collapsible event log (positive GREEN + violation RED only) */}
+      {phase === 'live' && (
+        <div className="absolute left-3 top-20 z-30 w-72 max-w-[calc(100vw-1.5rem)]">
+          <button
+            onClick={() => setShowLog((s) => !s)}
+            className="rounded-lg bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-300 ring-1 ring-white/15 backdrop-blur"
+          >
+            {showLog ? 'Hide event log' : 'Event log'}
+          </button>
+          {showLog && (
+            <div className="mt-2 rounded-xl bg-slate-900/80 p-2 backdrop-blur">
+              <EventTimeline events={events} />
+            </div>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmEnd}

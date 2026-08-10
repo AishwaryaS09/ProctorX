@@ -19,6 +19,9 @@ export const STATUS_STYLES = {
 
 export const EXAM_DURATION_MINUTES = 60;
 
+/** Distinct violation episodes that auto-terminate the exam. */
+export const VIOLATION_THRESHOLD = 3;
+
 export const EXAM_INSTRUCTIONS = [
   'Ensure only one person is visible.',
   'Keep your face inside the camera frame.',
@@ -32,14 +35,14 @@ export const EXAM_INSTRUCTIONS = [
 ];
 
 export const VIOLATION_META = {
-  FACE_ABSENT: { label: 'Face Absent', points: 5 },
-  MULTIPLE_FACES: { label: 'Multiple Faces', points: 10 },
-  LOOKING_AWAY: { label: 'Looking Away', points: 3 },
-  TAB_CHANGED: { label: 'Tab Changed', points: 10 },
-  WINDOW_UNFOCUSED: { label: 'Window Unfocused', points: 5 },
-  BROWSER_INACTIVE: { label: 'Browser Inactive', points: 5 },
-  BROWSER_MINIMIZED: { label: 'Browser Minimized', points: 5 },
-  FULLSCREEN_EXIT: { label: 'Fullscreen Exited', points: 8 },
+  FACE_ABSENT: { label: 'FACE ABSENT', points: 5 },
+  MULTIPLE_FACES: { label: 'FACES DETECTED', points: 10 },
+  LOOKING_AWAY: { label: 'LOOKING AWAY', points: 3 },
+  TAB_CHANGED: { label: 'TAB CHANGED', points: 10 },
+  WINDOW_UNFOCUSED: { label: 'WINDOW UNFOCUSED', points: 5 },
+  BROWSER_INACTIVE: { label: 'BROWSER INACTIVE', points: 5 },
+  BROWSER_MINIMIZED: { label: 'BROWSER MINIMIZED', points: 5 },
+  FULLSCREEN_EXIT: { label: 'FULLSCREEN EXIT', points: 8 },
 };
 
 export const FACE_STATUS_META = {

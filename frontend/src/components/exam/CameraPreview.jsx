@@ -18,6 +18,8 @@ export default function CameraPreview({
   warmupMs = 2500,
   onReady,
   onError,
+  className = '',
+  overlay = true,
 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -117,34 +119,38 @@ export default function CameraPreview({
   const meta = FACE_STATUS_META[faceStatus] || null;
 
   return (
-    <div className="relative overflow-hidden rounded-xl bg-slate-900">
+    <div className={`relative overflow-hidden bg-slate-900 ${className}`}>
       <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
       <canvas ref={canvasRef} className="hidden" />
 
-      {!ready && !error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-300">
-          <CameraIcon className="h-10 w-10" />
-          <p className="text-sm">Starting camera…</p>
-        </div>
-      )}
+      {overlay && (
+        <>
+          {!ready && !error && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-300">
+              <CameraIcon className="h-10 w-10" />
+              <p className="text-sm">Starting camera…</p>
+            </div>
+          )}
 
-      {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
-          <CameraIcon className="h-10 w-10 text-slate-500" />
-          <p className="text-sm text-red-400">{error}</p>
-          <p className="text-xs text-slate-400">Camera access is required for the exam.</p>
-        </div>
-      )}
+          {error && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
+              <CameraIcon className="h-10 w-10 text-slate-500" />
+              <p className="text-sm text-red-400">{error}</p>
+              <p className="text-xs text-slate-400">Camera access is required for the exam.</p>
+            </div>
+          )}
 
-      {ready && meta && (
-        <div className="absolute inset-x-0 bottom-0 flex justify-between p-3">
-          <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${meta.badge}`}>
-            {meta.label}
-          </span>
-          <span className="rounded-full bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
-            ● LIVE
-          </span>
-        </div>
+          {ready && meta && (
+            <div className="absolute inset-x-0 bottom-0 flex justify-between p-3">
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${meta.badge}`}>
+                {meta.label}
+              </span>
+              <span className="rounded-full bg-slate-900/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-400">
+                ● LIVE
+              </span>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

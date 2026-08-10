@@ -5,6 +5,7 @@ const {
 } = require('../config/constants');
 const FaceEvent = require('../models/FaceEvent');
 const BrowserEvent = require('../models/BrowserEvent');
+const ExamEvent = require('../models/ExamEvent');
 const Violation = require('../models/Violation');
 const { recordViolation } = require('./trust.service');
 const { emitSession } = require('../socket/socketServer');
@@ -12,14 +13,17 @@ const { riskFor } = require('../utils/formatters');
 const { counterState } = require('../utils/sessionState');
 
 /**
- * Tracks the last *non-ERROR* face status per session (in-memory) so that a
- * FACE violation is recorded on a state transition (e.g. PRESENT -> ABSENT)
- * rather than on every frame of a sustained absence. This mirrors real
- * proctoring behaviour: leaving the camera triggers one violation, returning
- * resets, and leaving again triggers another.
+ * Episode tracking (in-memory, per process).
+ * Violations are created on STATE TRANSITIONS only — never per frame — so a
+ * single continuous absence / multiple-face period / looking-away period /
+ * browser-inactivity period yields exactly ONE violation. Returning to the
+ * normal state resets the episode; leaving again starts a new one.
  */
 const lastFaceStatusBySession = new Map();
+const absenceStartBySession = new Map();
+const browserEpisodeBySession = new Map();
 
+/** Track the last *non-ERROR* face status per session (used for transitions). */
 function trackFaceStatus(sessionId, faceStatus) {
   const key = sessionId.toString();
   const previous = lastFaceStatusBySession.get(key);
@@ -29,11 +33,22 @@ function trackFaceStatus(sessionId, faceStatus) {
   return previous;
 }
 
+/** Persist a positive (GREEN) lifecycle event for the session timeline. */
+async function recordLifecycleEvent(session, candidate, status, message) {
+  return ExamEvent.create({
+    session: session._id || session,
+    candidate: candidate._id || candidate,
+    status,
+    message: message || undefined,
+  });
+}
+
 /**
- * Persist a face analysis result for a session. When the AI reports a
- * violation state (ABSENT / MULTIPLE / LOOKING_AWAY) AND that state is a
- * transition from the previous analysed frame, a violation is recorded
- * through the trust engine.
+ * Persist a face analysis result. A violation is created ONLY when the AI
+ * reports a violation state (ABSENT / MULTIPLE / LOOKING_AWAY) AND that state
+ * is a transition from the previously analysed state. Sustaining the same
+ * state never creates additional violations. The matching ExamSession counter
+ * is incremented once per episode (the persisted source of truth).
  */
 async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
   const faceStatus = result.faceStatus || result.face_status || 'ERROR';
@@ -51,10 +66,41 @@ async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
     screenshotPath: screenshotPath || undefined,
   });
 
-  const counterField = FACE_STATUS_COUNTER[faceStatus];
-  if (counterField) {
-    session[counterField] = (session[counterField] || 0) + 1;
-    await session.save();
+  const previous = trackFaceStatus(session._id, faceStatus);
+
+  // Continuous-absence duration (seconds) for the live "Face Absent: Xs" UI.
+  let absentDurationSeconds = 0;
+  const sessionKey = session._id.toString();
+  if (faceStatus === 'ABSENT') {
+    if (previous !== 'ABSENT') {
+      absenceStartBySession.set(sessionKey, Date.now());
+    }
+    const start = absenceStartBySession.get(sessionKey);
+    absentDurationSeconds = Math.max(0, Math.round((Date.now() - start) / 1000));
+  } else {
+    absenceStartBySession.delete(sessionKey);
+  }
+
+  let violation = null;
+  const violationType = FACE_STATE_TO_VIOLATION[faceStatus];
+
+  if (violationType) {
+    if (previous !== faceStatus) {
+      violation = await recordViolation({
+        session,
+        violationType,
+        message: remark,
+        metadata: { source: 'face', faceStatus, faceCount, screenshotPath },
+      });
+      const counterField = FACE_STATUS_COUNTER[faceStatus];
+      if (counterField) {
+        session[counterField] = (session[counterField] || 0) + 1;
+        await session.save();
+      }
+    }
+  } else if (faceStatus === 'PRESENT' && previous !== 'PRESENT' && previous !== 'LOOKING_AWAY') {
+    // A face was (re)detected after an absence / multi-face / start.
+    await recordLifecycleEvent(session, candidate, 'Face Detected', 'One face detected.');
   }
 
   emitSession(session._id, 'face_event', {
@@ -63,32 +109,19 @@ async function recordFaceEvent({ session, candidate, result, screenshotPath }) {
     faceCount,
     confidence,
     remark,
+    absentDurationSeconds,
     counters: counterState(session),
     createdAt: event.createdAt,
   });
 
-  let violation = null;
-  const violationType = FACE_STATE_TO_VIOLATION[faceStatus];
-  if (violationType && faceStatus !== 'ERROR') {
-    const previous = trackFaceStatus(session._id, faceStatus);
-    if (previous !== faceStatus) {
-      violation = await recordViolation({
-        session,
-        violationType,
-        message: remark,
-        metadata: { source: 'face', faceStatus, faceCount, screenshotPath },
-      });
-    }
-  } else {
-    trackFaceStatus(session._id, faceStatus);
-  }
-
-  return { event, violation };
+  return { event, violation, absentDurationSeconds };
 }
 
 /**
- * Persist a browser activity event. Suspicious statuses map to violations.
- * Each discrete browser event is treated independently (no transition gate).
+ * Persist a browser activity event. All "candidate left the page" signals
+ * (tab switch, window blur, minimize, hidden) collapse into a single
+ * BROWSER_INACTIVE episode; leaving fullscreen during the exam is a separate
+ * FULLSCREEN_EXIT episode. Each episode produces at most one violation.
  */
 async function recordBrowserEvent({ session, candidate, status, eventName, detail }) {
   const violationType = browserViolationFor(status, eventName);
@@ -103,14 +136,45 @@ async function recordBrowserEvent({ session, candidate, status, eventName, detai
     isViolation,
   });
 
+  const sessionKey = session._id.toString();
+  let episode = browserEpisodeBySession.get(sessionKey) || { inactive: false, fullscreen: false };
   let violation = null;
-  if (violationType) {
-    session.browserViolationCount = (session.browserViolationCount || 0) + 1;
-    if (violationType === 'FULLSCREEN_EXIT') {
-      session.fullscreenExitCount = (session.fullscreenExitCount || 0) + 1;
+
+  if (violationType === 'BROWSER_INACTIVE') {
+    if (!episode.inactive) {
+      episode.inactive = true;
+      session.browserViolationCount = (session.browserViolationCount || 0) + 1;
+      await session.save();
+      violation = await recordViolation({
+        session,
+        violationType,
+        message: `${detail || 'Candidate left the examination page'} detected`,
+        metadata: { source: 'browser', status, eventName },
+      });
     }
-    await session.save();
+  } else if (violationType === 'FULLSCREEN_EXIT') {
+    if (!episode.fullscreen) {
+      episode.fullscreen = true;
+      session.fullscreenExitCount = (session.fullscreenExitCount || 0) + 1;
+      await session.save();
+      violation = await recordViolation({
+        session,
+        violationType,
+        message: 'Fullscreen exited during the examination',
+        metadata: { source: 'browser', status, eventName },
+      });
+    }
   }
+
+  // Episode resets when the candidate returns to the examination page.
+  const normalized = (status || eventName || '').toLowerCase();
+  if (['tab_visible', 'visible', 'active', 'focus'].includes(normalized)) {
+    episode.inactive = false;
+  }
+  if (['fullscreen_entered', 'fullscreen_active'].includes(normalized)) {
+    episode.fullscreen = false;
+  }
+  browserEpisodeBySession.set(sessionKey, episode);
 
   emitSession(session._id, 'browser_event', {
     id: event._id.toString(),
@@ -121,15 +185,6 @@ async function recordBrowserEvent({ session, candidate, status, eventName, detai
     counters: counterState(session),
     createdAt: event.createdAt,
   });
-
-  if (violationType) {
-    violation = await recordViolation({
-      session,
-      violationType,
-      message: `${detail || status} detected`,
-      metadata: { source: 'browser', status, eventName },
-    });
-  }
 
   return { event, violation };
 }
@@ -163,4 +218,4 @@ async function currentState(session) {
   };
 }
 
-module.exports = { recordFaceEvent, recordBrowserEvent, currentState };
+module.exports = { recordFaceEvent, recordBrowserEvent, recordLifecycleEvent, currentState };

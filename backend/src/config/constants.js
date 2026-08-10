@@ -20,7 +20,12 @@ const SEVERITY = {
   HIGH: 'HIGH',
 };
 
-/** Points subtracted from the trust score for each violation type. */
+/**
+ * Points subtracted from the trust score for each violation type.
+ * TAB_CHANGED / WINDOW_UNFOCUSED / BROWSER_MINIMIZED are retained only to
+ * render legacy records; the event service now produces BROWSER_INACTIVE for
+ * all "candidate left the page" signals.
+ */
 const VIOLATION_POINTS = {
   FACE_ABSENT: 5,
   MULTIPLE_FACES: 10,
@@ -67,28 +72,34 @@ const FACE_STATUS_COUNTER = {
   ERROR: null,
 };
 
-/** Map browser status/event strings to a violation type (null = benign). */
+/**
+ * Map browser status/event strings to a violation type (null = benign).
+ * Every "candidate left the examination page" signal collapses into ONE
+ * user-facing BROWSER_INACTIVE violation (episode-deduped by the event
+ * service), so a single tab switch firing blur + visibilitychange still
+ * produces exactly one violation. Fullscreen is tracked separately.
+ */
 function browserViolationFor(status, eventName) {
-  const key = status || eventName;
+  const key = (status || eventName || '').toLowerCase();
   switch (key) {
     case 'tab_hidden':
-    case 'TAB_CHANGED':
-      return 'TAB_CHANGED';
+    case 'tabchanged':
     case 'window_blur':
-    case 'WINDOW_UNFOCUSED':
-      return 'WINDOW_UNFOCUSED';
+    case 'window_unfocused':
     case 'minimized':
-    case 'BROWSER_MINIMIZED':
-      return 'BROWSER_MINIMIZED';
-    case 'fullscreen_exit':
-    case 'FULLSCREEN_EXIT':
-      return 'FULLSCREEN_EXIT';
+    case 'browser_minimized':
     case 'inactive':
-    case 'BROWSER_INACTIVE':
+    case 'browser_inactive':
       return 'BROWSER_INACTIVE';
+    case 'fullscreen_exit':
+    case 'fullscreen_exited':
+      return 'FULLSCREEN_EXIT';
+    case 'fullscreen_entered':
+    case 'fullscreen_active':
     case 'tab_visible':
     case 'active':
-    case 'ACTIVE':
+    case 'visible':
+    case 'focus':
     default:
       return null;
   }
